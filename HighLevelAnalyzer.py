@@ -17,7 +17,10 @@ class Hla(HighLevelAnalyzer):
         'sbus_start_sync_byte': {
             'format': 'Start sync byte'
         },
-        'sbus_payload': {
+        'sbus_analog_payload': {
+            'format': 'PAYLOAD: {{data.payload}}'
+        },
+        'sbus_digital_payload': {
             'format': 'PAYLOAD: {{data.payload}}'
         },
         'sbus_end_sync_byte': {
@@ -29,8 +32,9 @@ class Hla(HighLevelAnalyzer):
     class dec_fsm_e(enum.Enum):
         idle = 1
         #start_sync_byte = 2  # No being used - If sync byte is detected the state changes from idle -> payload
-        payload = 3
-        stop_sync_byte = 4
+        analog_payload = 3
+        digital_payload = 4
+        stop_sync_byte = 5
 
     # Protocol defines
     SBUS_START_SYNC_BYTE = b'\x0f'  # 0x0F
@@ -63,25 +67,25 @@ class Hla(HighLevelAnalyzer):
         if self.sbus_frame_start == None and frame.data['data'] == self.SBUS_START_SYNC_BYTE and self.dec_fsm == self.dec_fsm_e.idle:
             print('Start sync byte detected.')
             self.sbus_frame_start = frame.start_time
-            self.dec_fsm = self.dec_fsm_e.payload
+            self.dec_fsm = self.dec_fsm_e.analog_payload
             self.sbus_frame_current_index += 1
             return AnalyzerFrame('START', frame.start_time, frame.end_time, {})
 
-        # Payload
-        if self.dec_fsm == self.dec_fsm_e.payload:
+        # Analog payload
+        if self.dec_fsm == self.dec_fsm_e.analog_payload:
             payload = int.from_bytes(frame.data['data'], byteorder='big')
             if self.sbus_frame_current_index == 1:  # First payload byte
                 self.sbus_payload_start = frame.start_time
                 self.sbus_payload.append(payload)
                 self.sbus_frame_current_index += 1
                 #print('Payload start ({}): {:2x}'.format(self.sbus_frame_current_index, payload))
-            elif self.sbus_frame_current_index < 23:  # ... still collecting payload bytes ...
+            elif self.sbus_frame_current_index < 22:  # ... still collecting payload bytes ...
                 self.sbus_payload.append(payload)
                 self.sbus_frame_current_index += 1
                 #print('Adding payload ({}): {:2x}'.format(self.sbus_frame_current_index, payload))
-            elif self.sbus_frame_current_index == 23:  # Last payload byte received
+            elif self.sbus_frame_current_index == 22:  # Last analog payload byte received
                 analyzerframe = None
-                self.dec_fsm = self.dec_fsm_e.stop_sync_byte
+                self.dec_fsm = self.dec_fsm_e.digital_payload
                 self.sbus_payload_end = frame.end_time
                 self.sbus_payload.append(payload)
                 #print('Payload complete ({}): {:2x}'.format(self.sbus_frame_current_index, payload))
@@ -99,14 +103,44 @@ class Hla(HighLevelAnalyzer):
                     channels.append(value)
                     channels.append(value_ms)
                 print(channels)
-                payload_str = ('Ch1: {} ({} ms), Ch2: {} ({} ms), Ch3: {} ({} ms), Ch4: {} ({} ms), ' + \
-                               'Ch5: {} ({} ms), Ch6: {} ({} ms), Ch7: {} ({} ms), Ch8: {} ({} ms), ' + \
-                               'Ch9: {} ({} ms), Ch10: {} ({} ms), Ch11: {} ({} ms), Ch12: {} ({} ms), ' + \
-                               'Ch13: {} ({} ms), Ch14: {} ({} ms), Ch15: {} ({} ms), Ch16: {} ({} ms)').format(*channels)
+                payload_str = ('Ch1:{} ({}µs), Ch2:{} ({}µs), Ch3:{} ({}µs), Ch4:{} ({}µs), ' + \
+                               'Ch5:{} ({}µs), Ch6:{} ({}µs), Ch7:{} ({}µs), Ch8:{} ({}µs), ' + \
+                               'Ch9:{} ({}µs), Ch10:{} ({}µs), Ch11:{} ({}µs), Ch12:{} ({}µs), ' + \
+                               'Ch13:{} ({}µs), Ch14:{} ({}µs), Ch15:{} ({}µs), Ch16:{} ({}µs)').format(*channels)
                 print(payload_str)
-                analyzerframe = AnalyzerFrame('sbus_payload', self.sbus_payload_start, frame.end_time, {
+                analyzerframe = AnalyzerFrame('sbus_analog_payload', self.sbus_payload_start, frame.end_time, {
                         'payload': payload_str})
                 return analyzerframe
+
+        # Digital payload
+        if self.dec_fsm == self.dec_fsm_e.digital_payload:
+            self.dec_fsm = self.dec_fsm_e.stop_sync_byte
+            payload = int.from_bytes(frame.data['data'], byteorder='big')
+            print(payload)
+            if payload == 0:
+                return AnalyzerFrame('', frame.start_time, frame.end_time, {})
+            else:
+                payload_str = ''
+                sep = False
+                if (payload & 0x8) != 0:
+                    payload_str += "Failsafe"
+                    sep = True
+                if (payload & 0x4) != 0:
+                    if sep:
+                        payload_str += ", "
+                    payload_str += "Frame lost"
+                    sep = True
+                if (payload & 0x2) != 0:
+                    if sep:
+                        payload_str += ", "
+                    payload_str += "Ch18 on"
+                    sep = True
+                if (payload & 0x1) != 0:
+                    if sep:
+                        payload_str += ", "
+                    payload_str += "Ch17 on"
+                print(payload_str)
+                return AnalyzerFrame('sbus_digital_payload', frame.start_time, frame.end_time, {'payload': payload_str})
 
         # Stop sync byte
         if self.dec_fsm == self.dec_fsm_e.stop_sync_byte and frame.data['data'] == self.SBUS_STOP_SYNC_BYTE:

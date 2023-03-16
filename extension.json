@@ -2,7 +2,7 @@
   "name": "Futaba SBUS",
   "apiVersion": "1.0.0",
   "author": "Pascal HEUDE",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Decode the Futaba SBUS protocol",
   "extensions": {
     "Futaba SBUS": {
